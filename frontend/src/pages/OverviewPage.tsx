@@ -1,4 +1,4 @@
-import { isValidElement, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { isValidElement, useLayoutEffect, useRef, useState, useEffect, type ReactNode } from 'react'
 
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
@@ -24,7 +24,6 @@ import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
 
 import GridIcon from '../components/GridIcon'
 
-import batLogoLight from '../assets/bat_logo_light.png'
 import dayHouse from '../assets/house/day-house.webp'
 import dayCar from '../assets/house/day-car.webp'
 import dayHeatPump from '../assets/house/day-heat-pump.webp'
@@ -129,7 +128,8 @@ const ENERGY_FLOW_PATHS = {
   solarToBattery: 'M 905 330 L 990 500 L 1165 745',
   batteryToHome: 'M 1165 745 L 1000 670 L 835 620',
   batteryToGrid: 'M 1165 745 L 1290 900 L 1430 1080',
-  gridToBattery: 'M 1430 1080 L 1290 900 L 1165 745'
+  gridToBattery: 'M 1430 1080 L 1290 900 L 1165 745',
+  toCar: 'M 1165 745 L 980 760 L 790 705',
 } as const
 
 const GRID_POINT = { x: 1430, y: 1080 } as const
@@ -185,6 +185,30 @@ function batterySocTone(socPercent: number, charging: boolean): string {
   if (socPercent <= 20) return 'is-low'
   if (socPercent <= 40) return 'is-medium'
   return 'is-healthy'
+}
+
+function useCurrentTime() {
+  const [now, setNow] = useState(() => new Date())
+
+  useEffect(() => {
+    let interval: number
+
+    const timeout = window.setTimeout(() => {
+      setNow(new Date())
+
+      interval = window.setInterval(() => {
+        setNow(new Date())
+      }, 60_000)
+    }, 60_000 - Date.now() % 60_000)
+
+    return () => {
+      window.clearTimeout(timeout)
+      window.clearInterval(interval)
+    }
+  }, [])
+
+  return now
+
 }
 
 function OverviewCard({ className, icon, title, main, mainTone = '', mainSubvalue, connector, children }: OverviewCardProps) {
@@ -304,6 +328,13 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
   const carbon = getOverviewCarbonValues(Boolean(plan.carbon_enable), currentRow)
   const nextStartTime = formatActionTime(actions.next.startsAt)
   const nextEndTime = formatActionTime(actions.next.endsAt)
+  const currentActionDetail = actions.current.limit !== null && ['Charge', 'Hold Charge', 'Freeze Charge'].includes(actions.current.label)
+    ? `Target ${actions.current.limit}%`
+    : null
+  const nextActionDetail = [
+    nextStartTime ? `${nextStartTime}${nextEndTime ? ` → ${nextEndTime}` : ''}` : null,
+    actions.next.limit !== null ? `Limit ${actions.next.limit}%` : null
+  ].filter(Boolean).join(' · ') || null
   const weather = powerFlow.weather
   const [weatherEffectsPreference, setWeatherEffectsPreference] = useStoredState(
     'predbat-overview-weather-effects',
@@ -315,6 +346,20 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
   const sceneKey = getOverviewSceneKey(powerFlow.sun_state, hasCar, hasHeatPump, weatherEffect === 'snow')
   const sceneImage = SCENE_IMAGES[sceneKey] ?? dayHouse
   const isNight = sceneKey.startsWith('night-')
+
+  const now = useCurrentTime()
+
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(now)
+
+  const date = new Intl.DateTimeFormat(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long'
+  }).format(now)
 
   useLayoutEffect(() => {
     const stage = stageRef.current
@@ -377,7 +422,8 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
         solarToBattery: cssPath('--overview-flow-solar-path', ENERGY_FLOW_PATHS.solarToBattery),
         batteryToHome: cssPath('--overview-flow-battery-to-home-path', ENERGY_FLOW_PATHS.batteryToHome),
         batteryToGrid: cssPath('--overview-flow-battery-to-grid-path', ENERGY_FLOW_PATHS.batteryToGrid),
-        gridToBattery: cssPath('--overview-flow-grid-to-battery-path', ENERGY_FLOW_PATHS.gridToBattery)
+        gridToBattery: cssPath('--overview-flow-grid-to-battery-path', ENERGY_FLOW_PATHS.gridToBattery),
+        toCar: cssPath('--overview-flow-car-path', ENERGY_FLOW_PATHS.toCar)
       }
       setFlowPaths((current) => JSON.stringify(current) === JSON.stringify(nextFlowPaths) ? current : nextFlowPaths)
       const nextGridPoint = {
@@ -405,7 +451,13 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
       <header className="overview-page-header">
         <div>
           <h1>Overview</h1>
-          <p>Live energy use, generation and Predbat's next action.</p>
+        </div>
+        <div className="date-time-display">
+          <time dateTime={now.toISOString()}>
+            <strong className="date">{date}</strong>
+            <br />
+            <strong className="time">{time}</strong>
+          </time>
         </div>
       </header>
 
@@ -427,33 +479,29 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
         </svg>
 
         <div className="overview-column overview-column-left">
-          <OverviewCard
-            className="overview-card-predbat"
-            icon={<img src={batLogoLight} alt="" />}
-            title="Predbat"
-            main={actions.current.label}
-            mainTone={actionTone(actions.current.label)}
-            mainSubvalue={actions.current.limit !== null && ['Charge', 'Hold Charge', 'Freeze Charge'].includes(actions.current.label) ? `Charge target ${actions.current.limit}%` : null}
-          >
-            <div className="overview-predbat-next">
-              <div className="overview-predbat-next-row">
-                <span>Next Action</span>
-                <strong className={actionTone(actions.next.label)}>{actions.next.label}</strong>
+          <OverviewCard className="overview-card-solar" connector="solar" icon={faSolarPanel} title="Solar" main={formatPower(powerFlow.pv_power)} mainTone={getOverviewPowerTone(powerFlow.pv_power, powerFlow.pv_generating ? 'is-solar' : '')}>
+            {weather && (
+              <div className="overview-weather">
+                <FontAwesomeIcon icon={weatherIcon(weather.state)} />
+                <span>{formatWeatherStatus(weather.state)}</span>
+                {weather.temperature !== null && <strong><FontAwesomeIcon icon={faTemperatureHalf} /> {formatTemperature(weather.temperature, weather.temperature_unit)}</strong>}
               </div>
-              {nextStartTime && <span>{nextStartTime}{nextEndTime && ` → ${nextEndTime}`}</span>}
-              {actions.next.limit !== null && <span>Limit {actions.next.limit}%</span>}
-            </div>
+            )}
+            <Detail label="Generated today" value={formatEnergy(powerFlow.totals.pv_today)} />
+            <Detail label="Forecast today" value={formatEnergy(powerFlow.pv_forecast_today)} />
           </OverviewCard>
 
           <OverviewCard className="overview-card-home" connector="home" icon={faHouse} title="Home" main={formatPower(powerFlow.house_power)} mainTone={getOverviewPowerTone(powerFlow.house_power, 'is-home')}>
             <Detail label="Used today" value={formatEnergy(powerFlow.totals.load_today)} />
+            <Detail label="Predbat Status" value={actions.current.label} tone={actionTone(actions.current.label)} subvalue={currentActionDetail} />
+            <Detail label="Next Action" value={actions.next.label} tone={actionTone(actions.next.label)} subvalue={nextActionDetail} />
           </OverviewCard>
 
           {hasCar && (
             <OverviewCard className="overview-card-ev" connector="car" icon={faCar} title="EV Charger" main={formatPower(powerFlow.car.power)} mainTone={getOverviewPowerTone(powerFlow.car.power, powerFlow.car.charging ? 'is-charge' : '')}>
               <Detail label="Status" value={carStatus} tone={powerFlow.car.charging ? 'is-charge' : ''} />
               {powerFlow.car.soc !== null && <Detail label="Car SOC" value={`${powerFlow.car.soc.toFixed(0)}%`} />}
-              <Detail label="Energy today" value={formatEnergy(powerFlow.car.energy_today)} />
+              <Detail label="Last session" value={formatEnergy(powerFlow.car.energy_today)} />
             </OverviewCard>
           )}
 
@@ -484,6 +532,13 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
             </defs>
             {powerFlow.pv_generating && <path className="overview-flow overview-flow-solar is-active" d={flowPaths.solarToBattery} markerEnd="url(#overview-arrow-solar)" />}
             {powerFlow.battery_discharging && <path className="overview-flow overview-flow-battery is-discharging is-active" d={flowPaths.batteryToHome} markerEnd="url(#overview-arrow-battery)" />}
+            {powerFlow.car.charging && powerFlow.car.power > 0 && (
+              <path
+                className="overview-flow overview-flow-car is-active"
+                d={flowPaths.toCar}
+                markerEnd="url(#overview-arrow-battery)"
+              />
+            )}
             <path className={`overview-flow overview-flow-grid ${gridExporting ? 'is-export is-active' : powerFlow.grid_importing ? 'is-import is-active' : 'is-idle'}`} d={gridExporting ? flowPaths.batteryToGrid : flowPaths.gridToBattery} markerEnd={gridExporting ? 'url(#overview-arrow-grid-export)' : 'url(#overview-arrow-grid-import)'} />
             <g className="overview-grid-point" transform={`translate(${gridPoint.x} ${gridPoint.y})`}>
               <circle r="13" />
@@ -493,17 +548,6 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
         </figure>
 
         <div className="overview-column overview-column-right">
-          <OverviewCard className="overview-card-solar" connector="solar" icon={faSolarPanel} title="Solar" main={formatPower(powerFlow.pv_power)} mainTone={getOverviewPowerTone(powerFlow.pv_power, powerFlow.pv_generating ? 'is-solar' : '')}>
-            {weather && (
-              <div className="overview-weather">
-                <FontAwesomeIcon icon={weatherIcon(weather.state)} />
-                <span>{formatWeatherStatus(weather.state)}</span>
-                {weather.temperature !== null && <strong><FontAwesomeIcon icon={faTemperatureHalf} /> {formatTemperature(weather.temperature, weather.temperature_unit)}</strong>}
-              </div>
-            )}
-            <Detail label="Generated today" value={formatEnergy(powerFlow.totals.pv_today)} />
-            <Detail label="Forecast today" value={formatEnergy(powerFlow.pv_forecast_today)} />
-          </OverviewCard>
 
           <OverviewCard
             className="overview-card-battery"
@@ -544,7 +588,6 @@ export default function OverviewPage({ plan, powerFlow }: OverviewPageProps) {
             <Detail label="Imported today" value={formatEnergy(powerFlow.totals.import_today)} subvalue={carbon.total} />
             <Detail label="Exported today" value={formatEnergy(powerFlow.totals.export_today)} tone="is-export" />
           </OverviewCard>
-
           {powerFlow.ashp && (
             <OverviewCard
               className={`overview-card-ashp ${heatPumpRunning ? 'is-running' : ''}`}

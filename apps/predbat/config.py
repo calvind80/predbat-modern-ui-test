@@ -2931,7 +2931,16 @@ APPS_SCHEMA = {
     },
     "car_charging_limit": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_exclusive": {"type": "boolean_list", "entries": "num_cars"},
-    "ashp_enable": {"type": "boolean", "description": "Show the optional air-source heat pump card on Overview."},
+    "weather": {
+        "type": "sensor",
+        "sensor_type": "string",
+        "transient_ok": True,
+        "description": "Home Assistant weather entity used by Overview when PredHeat is not configured.",
+    },
+    "ashp_enable": {
+        "type": "boolean",
+        "description": "Optional Overview ASHP-card override. PredHeat in pump mode shows the card automatically; set false to hide it or true when PredHeat is not configured.",
+    },
     "ashp_power": {
         "type": "sensor",
         "sensor_type": "float",
@@ -2944,11 +2953,17 @@ APPS_SCHEMA = {
         "transient_ok": True,
         "description": "Home Assistant entity reporting the heat pump state, such as off, heating or hot_water.",
     },
+    "heat_energy": {
+        "type": "sensor",
+        "sensor_type": "float",
+        "transient_ok": True,
+        "description": "Home Assistant entity reporting today's heat-pump energy use when PredHeat is not configured.",
+    },
     "ashp_energy_today": {
         "type": "sensor",
         "sensor_type": "float",
         "transient_ok": True,
-        "description": "Home Assistant entity reporting the heat pump's energy use today.",
+        "description": "Legacy alias for heat_energy, retained so existing Overview configurations continue to work.",
     },
     "carbon_intensity": {"type": "sensor", "sensor_type": "string"},
     "carbon_postcode": {"type": "string", "empty": False},
@@ -2991,6 +3006,11 @@ APPS_SCHEMA = {
     "myenergi_enable_controls": {"type": "boolean"},
     "myenergi_poll_seconds": {"type": "integer", "zero": False},
     "myenergi_zappi_control": {"type": "boolean"},
+    "wallbox_username": {"type": "string", "empty": False},
+    "wallbox_password": {"type": "string", "empty": False},
+    "wallbox_automatic": {"type": "boolean"},
+    "wallbox_control": {"type": "boolean"},
+    "wallbox_poll_seconds": {"type": "integer", "zero": False},
     "fox_key": {"type": "string", "empty": False},
     "fox_automatic": {"type": "boolean"},
     "fox_automatic_ignore_pv": {"type": "boolean"},
@@ -3110,6 +3130,8 @@ APPS_SCHEMA = {
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    "gateway_shared_ct": {"type": "boolean"},
+    "gateway_integrate_power": {"type": "boolean"},
     # User-maintained log/debug redaction denylist (GH#4770): literal strings to mask wherever a
     # value appears in predbat.log or a debug dump, for anything Predbat cannot recognise as a
     # credential from its own config - an MPAN or account number surfaced by a third-party HA

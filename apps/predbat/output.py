@@ -22,7 +22,7 @@ from html import escape as escape_html
 from datetime import timedelta
 from predbat import THIS_VERSION_DISPLAY
 from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_IDLE, MINUTE_WATT, FULL_EXPORT_POWER, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, CHARGE_STATE_PRECEDENCE, EXPORT_STATE_PRECEDENCE
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate, export_mode_of, export_target_of, export_power_of, export_limit_sort_key, pack_export_limit, export_limit_from_stored, minutes_to_time, str2time
 from prediction import Prediction
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
@@ -55,6 +55,41 @@ REASON_TEMPLATES = {
     "manual_override_demand": "You manually set this slot to demand mode.",
     "mixed_slot_states": "This slot did not hold one state throughout - Predbat was in: {states}. The cell shows the most significant of them.",
 }
+
+
+def event_slot_contains_minute(slot, minute, midnight_utc, start_key="start", end_key="end"):
+    """Return whether an event slot contains an absolute plan minute."""
+    start = slot.get(start_key)
+    end = slot.get(end_key)
+    if not start or not end:
+        return False
+    try:
+        start_minute = minutes_to_time(str2time(start), midnight_utc)
+        end_minute = minutes_to_time(str2time(end), midnight_utc)
+    except (TypeError, ValueError):
+        return False
+    return start_minute <= minute < end_minute
+
+
+def plan_rate_event_type(base, minute):
+    """Return the programme that produced a plan row's generic ``saving`` rate tag."""
+    matching_free_slots = [slot for slot in base.octopus_free_slots if event_slot_contains_minute(slot, minute, base.midnight_utc)]
+    if any(slot.get("event_type") == "WEEKEND_HAPPY_HOUR" for slot in matching_free_slots):
+        return "octopus_happy_hour"
+    if any(slot.get("event_type") == "FREE_ELECTRICITY" for slot in matching_free_slots):
+        return "octopus_free_electricity"
+    if any("POWER_UP" in str(slot.get("event_type", "")).upper() or slot.get("event_type") == "TURN_UP" for slot in matching_free_slots):
+        return "octopus_power_up"
+    if matching_free_slots:
+        return "octopus_free_electricity"
+    for slot in base.octopus_saving_slots:
+        active_undated_slot = slot.get("state") and not slot.get("start") and not slot.get("end") and (base.minutes_now // 30) * 30 <= minute < (base.minutes_now // 30) * 30 + 30
+        if active_undated_slot or event_slot_contains_minute(slot, minute, base.midnight_utc):
+            return "octopus_power_down"
+    for slot in base.axle_sessions:
+        if event_slot_contains_minute(slot, minute, base.midnight_utc, "start_time", "end_time"):
+            return "axle_{}".format(slot.get("import_export", "event"))
+    return "energy_event"
 
 
 def yesterday_slot_is_exporting(slot_status):
@@ -163,10 +198,16 @@ class Output:
                 else:
                     slot = False
 
+                # Show when the window really began, not the planner's clamped start, so the
+                # displayed start time stops walking forward once charging is underway (#269).
+                # Octopus slots carry no start_orig and show their own start - which the Octopus
+                # component trims to now once a dispatch is underway, so those still move.
+                window_start = window.get("start_orig", window["start"])
+
                 time_format_time = "%H:%M:%S"
-                car_startt = self.midnight_utc + timedelta(minutes=window["start"])
+                car_startt = self.midnight_utc + timedelta(minutes=window_start)
                 car_start_time_str = car_startt.strftime(time_format_time)
-                minutes_to = max(window["start"] - self.minutes_now, 0)
+                minutes_to = max(window_start - self.minutes_now, 0)
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
                     state=car_start_time_str,
@@ -184,7 +225,7 @@ class Output:
                 total_kwh = 0
                 total_cost = 0
                 for window in self.car_charging_slots[car_n]:
-                    start = self.time_abs_str(window["start"])
+                    start = self.time_abs_str(window.get("start_orig", window["start"]))
                     end = self.time_abs_str(window["end"])
                     kwh = dp2(window["kwh"])
                     average = dp2(window["average"])
@@ -410,12 +451,15 @@ class Output:
     def publish_rates_import(self):
         """
         Publish the import rates
+
+        The low rate sensors come from low_rates_tariff, the tariff's own cheap windows, rather than the
+        plan's charge windows, which a saving session or Axle event can widen to every slot (GH#5050)
         """
         window_str = ""
         # Output rate info
-        if self.low_rates:
+        if self.low_rates_tariff:
             window_n = 0
-            for window in self.low_rates:
+            for window in self.low_rates_tariff:
                 rate_low_start = window["start"]
                 rate_low_end = window["end"]
                 rate_low_average = window["average"]
@@ -521,7 +565,7 @@ class Output:
         self.log("Low import rate windows [{}]".format(window_str))
 
         # Clear rates that aren't available
-        if not self.low_rates:
+        if not self.low_rates_tariff:
             self.log("No low rate period found")
             self.dashboard_item(
                 self.prefix + ".low_rate_start",
@@ -560,7 +604,7 @@ class Output:
                 attributes={"friendly_name": "Next low rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
             )
             self.dashboard_item("binary_sensor." + self.prefix + "_low_rate_slot", state="off", attributes={"friendly_name": "Predbat low rate slot", "icon": "mdi:home-lightning-bolt-outline"})
-        if len(self.low_rates) < 2:
+        if len(self.low_rates_tariff) < 2:
             self.dashboard_item(
                 self.prefix + ".low_rate_start_2",
                 state="undefined",
@@ -1794,6 +1838,8 @@ class Output:
             export_rate_adjust_type = self.rate_export_replicated.get(minute)
             if export_rate_adjust_type is not None:
                 json_row["export_rate_adjust_type"] = export_rate_adjust_type
+            if import_rate_adjust_type == "saving" or export_rate_adjust_type == "saving":
+                json_row["rate_event_type"] = plan_rate_event_type(self, minute_start)
             # Add adjusted rates (always included for client-side debug toggle)
             json_row["import_rate_adjusted"] = dp2(rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
             json_row["export_rate_adjusted"] = dp2(rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)

@@ -72,6 +72,26 @@ type TimelineEvent = {
   carbonChange: number
 
   explanation?: string
+
+  rateEventType?: NonNullable<PlanRow['rate_event_type']>
+}
+
+const RATE_EVENT_DETAILS: Record<NonNullable<PlanRow['rate_event_type']>, { label: string; description: string; colour: string }> = {
+  octopus_power_down: { label: 'Power Down', description: 'Octopus Power Down has adjusted the export rate for this period.', colour: 'power-down' },
+  octopus_power_up: { label: 'Power Up', description: 'Octopus Power Up has made electricity free for this period.', colour: 'power-up' },
+  octopus_happy_hour: { label: 'Happy Hour', description: 'Octopus Weekend Happy Hour has made electricity free for this period.', colour: 'power-up' },
+  octopus_free_electricity: { label: 'Free electricity', description: 'Predbat has applied a free electricity rate for this period.', colour: 'power-up' },
+  axle_import: { label: 'Axle import', description: 'An Axle import event has adjusted the rate for this period.', colour: 'axle-import' },
+  axle_export: { label: 'Axle export', description: 'An Axle export event has adjusted the rate for this period.', colour: 'axle-export' },
+  axle_event: { label: 'Axle event', description: 'An Axle event has adjusted the rate for this period.', colour: 'axle-event' },
+  energy_event: { label: 'Energy event', description: 'A joined energy event has adjusted the rate for this period.', colour: 'generic' }
+}
+
+function getRateEventType(row: PlanRow) {
+  const isEnergyEvent =
+    row.import_rate_adjust_type === 'saving' || row.export_rate_adjust_type === 'saving'
+
+  return isEnergyEvent ? (row.rate_event_type ?? 'energy_event') : undefined
 }
 
 type TimelineTick = {
@@ -409,6 +429,8 @@ function buildTimelineEvents(
 
   let currentAction = getTimelineAction(rows[0].state)
 
+  let currentRateEventType = getRateEventType(rows[0])
+
   function addEvent(endIndex: number) {
     const eventRows = rows.slice(startIndex, endIndex + 1)
 
@@ -533,19 +555,25 @@ function buildTimelineEvents(
 
       carCharging,
 
-      explanation
+      explanation,
+
+      rateEventType: currentRateEventType
     })
   }
 
   for (let index = 1; index < rows.length; index += 1) {
     const action = getTimelineAction(rows[index].state)
 
-    if (action !== currentAction) {
+    const rateEventType = getRateEventType(rows[index])
+
+    if (action !== currentAction || rateEventType !== currentRateEventType) {
       addEvent(index - 1)
 
       startIndex = index
 
       currentAction = action
+
+      currentRateEventType = rateEventType
     }
   }
 
@@ -897,6 +925,10 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
     ? formatTargetSoc(activeEvent.targetSocStart, activeEvent.targetSocEnd)
     : null
 
+  const activeRateEvent = activeEvent?.rateEventType
+    ? RATE_EVENT_DETAILS[activeEvent.rateEventType]
+    : null
+
   const ticks = buildTimeTicks(timelineStart, timelineEnd)
 
   /*
@@ -1025,6 +1057,14 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
 
               <span>{formatEventRange(activeEvent.start, activeEvent.end)}</span>
             </div>
+
+            {activeRateEvent && (
+              <span className={`plan-timeline-rate-event is-${activeRateEvent.colour}`}>
+                <FontAwesomeIcon icon={faBolt} aria-hidden="true" />
+
+                {activeRateEvent.label}
+              </span>
+            )}
           </div>
 
           <div className="plan-timeline-detail-values">
@@ -1100,8 +1140,10 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
             )}
           </div>
 
-          {activeEvent.explanation && (
-            <p className="plan-timeline-explanation">{activeEvent.explanation}</p>
+          {(activeRateEvent || activeEvent.explanation) && (
+            <p className="plan-timeline-explanation">
+              {[activeRateEvent?.description, activeEvent.explanation].filter(Boolean).join(' ')}
+            </p>
           )}
         </div>
       )}
@@ -1156,18 +1198,23 @@ export default function PlanVisual({ plan }: PlanVisualProps) {
 
               const isActive = activeEvent?.id === event.id
 
+              const rateEvent = event.rateEventType
+                ? RATE_EVENT_DETAILS[event.rateEventType]
+                : null
+
               return (
                 <button
                   key={event.id}
                   type="button"
-                  className={`plan-timeline-event timeline-action-${event.action} ${isCurrent ? 'is-current' : ''} ${isActive ? 'is-active' : ''}`}
+                  className={`plan-timeline-event timeline-action-${event.action} ${rateEvent ? `timeline-rate-event-${rateEvent.colour}` : ''} ${isCurrent ? 'is-current' : ''} ${isActive ? 'is-active' : ''}`}
                   style={{
                     left: `${startX}px`,
 
                     width: `${eventWidth}px`
                   }}
                   aria-label={
-                    `${getEventTitle(event)}, ` + `${formatEventRange(event.start, event.end)}`
+                    `${rateEvent ? `${rateEvent.label}, ` : ''}${getEventTitle(event)}, ` +
+                    `${formatEventRange(event.start, event.end)}`
                   }
                   aria-pressed={selectedEventId === event.id}
                   onMouseEnter={() => {

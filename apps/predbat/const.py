@@ -33,6 +33,9 @@ PREDICT_STEP = 5
 DYNAMIC_LOAD_CAR_SENSOR_MINUTES = 2
 DYNAMIC_LOAD_CAR_START_MINUTES = 3
 DYNAMIC_LOAD_CAR_LOAD_MINUTES = 5
+# The load test reads "low" - no car can be charging - under this fraction of car_charging_threshold. The
+# margin below the threshold allows for a load sensor that under-reads while the battery is charging (GH#5461)
+DYNAMIC_LOAD_CAR_LOW_FACTOR = 0.85
 # A car_charging_now reading only confirms the half hour it is in (keeping that half hour cheap once the car
 # stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary
 DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
@@ -63,6 +66,9 @@ CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_DAILY = "%Y-%m-%d"
+# Dispatch source for a charger's own schedule on a tariff with no dispatch rate (e.g. Ohme off Octopus
+# Intelligent): the slots are when the car will charge, but they are billed at the normal tariff rate
+DISPATCH_SOURCE_CHARGER_SCHEDULE = "charger-schedule"
 TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
 INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
